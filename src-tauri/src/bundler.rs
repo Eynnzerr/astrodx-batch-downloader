@@ -12,8 +12,6 @@ pub struct BundleSummary {
   pub output_path: String,
   pub source_file_count: usize,
   pub processed_count: usize,
-  pub mp4_removed: usize,
-  pub backup_dir: String,
 }
 
 fn ensure_parent(path: &Path) -> Result<()> {
@@ -26,7 +24,6 @@ fn ensure_parent(path: &Path) -> Result<()> {
 pub fn build_bundle_from_files(
   source_files: &[PathBuf],
   output_path: &Path,
-  backup_dir: Option<PathBuf>,
 ) -> Result<BundleSummary> {
   if source_files.is_empty() {
     return Err(anyhow!("no source files for bundling"));
@@ -35,29 +32,6 @@ pub fn build_bundle_from_files(
   ensure_parent(output_path)?;
 
   let ts = Local::now().format("%Y%m%d_%H%M%S").to_string();
-  let default_backup = output_path
-    .parent()
-    .unwrap_or_else(|| Path::new("."))
-    .join(format!("backup_original_adx_{}", ts));
-  let backup_dir = backup_dir.unwrap_or(default_backup);
-  fs::create_dir_all(&backup_dir)
-    .with_context(|| format!("create backup dir failed: {}", backup_dir.display()))?;
-
-  for src in source_files {
-    if src.exists() {
-      let dst = backup_dir.join(
-        src.file_name()
-          .ok_or_else(|| anyhow!("invalid source file name: {}", src.display()))?,
-      );
-      fs::copy(src, &dst).with_context(|| {
-        format!(
-          "copy backup failed: {} -> {}",
-          src.display(),
-          dst.display()
-        )
-      })?;
-    }
-  }
 
   let work_root = std::env::temp_dir().join(format!("niconico_bundle_{}", ts));
   let zip_copies = work_root.join("zip_copies");
@@ -66,8 +40,6 @@ pub fn build_bundle_from_files(
   fs::create_dir_all(&extracted)?;
 
   let mut processed_count = 0usize;
-  let mut mp4_removed = 0usize;
-
   for src in source_files {
     if !src.exists() {
       continue;
@@ -98,12 +70,6 @@ pub fn build_bundle_from_files(
 
     for i in 0..archive.len() {
       let mut entry = archive.by_index(i)?;
-      let entry_name = entry.name().to_string();
-      if entry_name.to_ascii_lowercase().ends_with(".mp4") {
-        mp4_removed += 1;
-        continue;
-      }
-
       let enclosed = match entry.enclosed_name() {
         Some(path) => path.to_path_buf(),
         None => continue,
@@ -160,7 +126,5 @@ pub fn build_bundle_from_files(
     output_path: output_path.to_string_lossy().to_string(),
     source_file_count: source_files.len(),
     processed_count,
-    mp4_removed,
-    backup_dir: backup_dir.to_string_lossy().to_string(),
   })
 }

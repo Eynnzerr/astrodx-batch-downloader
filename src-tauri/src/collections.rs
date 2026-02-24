@@ -78,28 +78,45 @@ fn collect_manifest_files(root: &Path) -> Vec<PathBuf> {
   files
 }
 
-fn resolve_builtin_collections_dir(app: &AppHandle) -> Option<PathBuf> {
+fn has_manifest_json(root: &Path) -> bool {
+  root.exists() && !collect_manifest_files(root).is_empty()
+}
+
+fn builtin_dir_candidates(app: &AppHandle) -> Vec<PathBuf> {
+  let mut out = Vec::new();
+
   if let Ok(dir) = std::env::var("NICONICO_COLLECTIONS_DIR") {
-    let p = PathBuf::from(dir);
-    if p.exists() {
-      return Some(p);
-    }
+    out.push(PathBuf::from(dir));
   }
 
   if let Ok(cwd) = std::env::current_dir() {
-    let p = cwd.join("collections");
-    if p.exists() {
-      return Some(p);
+    out.push(cwd.join("collections"));
+    if let Some(parent) = cwd.parent() {
+      out.push(parent.join("collections"));
+      if let Some(grand_parent) = parent.parent() {
+        out.push(grand_parent.join("collections"));
+      }
     }
   }
+
+  // src-tauri Cargo.toml 所在目录，开发态稳定可用。
+  out.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../collections"));
 
   if let Ok(resource) = app.path().resource_dir() {
-    let p = resource.join("collections");
-    if p.exists() {
-      return Some(p);
-    }
+    out.push(resource.join("collections"));
+    // 某些打包配置会直接把资源内容放进 resource 根目录。
+    out.push(resource);
   }
 
+  out
+}
+
+fn resolve_builtin_collections_dir(app: &AppHandle) -> Option<PathBuf> {
+  for candidate in builtin_dir_candidates(app) {
+    if has_manifest_json(&candidate) {
+      return Some(candidate);
+    }
+  }
   None
 }
 
@@ -129,8 +146,14 @@ pub fn list_collections(
   app: &AppHandle,
   overlay: Option<PathBuf>,
 ) -> Result<Vec<CollectionManifestMeta>, String> {
-  let builtin_root =
-    resolve_builtin_collections_dir(app).ok_or_else(|| "cannot find builtin collections directory".to_string())?;
+  let builtin_root = resolve_builtin_collections_dir(app).ok_or_else(|| {
+    let tried = builtin_dir_candidates(app)
+      .into_iter()
+      .map(|p| p.to_string_lossy().to_string())
+      .collect::<Vec<_>>()
+      .join(" | ");
+    format!("cannot find builtin collections directory; tried: {}", tried)
+  })?;
 
   let mut merged: HashMap<String, CollectionManifestMeta> = HashMap::new();
 

@@ -40,6 +40,31 @@ fn now_str() -> String {
   Local::now().format("%Y-%m-%d %H:%M:%S").to_string()
 }
 
+fn truncate_for_log(input: &str, max_chars: usize) -> String {
+  let chars: Vec<char> = input.chars().collect();
+  if chars.len() <= max_chars {
+    return input.to_string();
+  }
+  let keep = max_chars.saturating_sub(3);
+  let mut out = chars.into_iter().take(keep).collect::<String>();
+  out.push_str("...");
+  out
+}
+
+fn mask_secret(input: &str) -> String {
+  let chars: Vec<char> = input.chars().collect();
+  let len = chars.len();
+  if len == 0 {
+    return "<empty>".to_string();
+  }
+  if len <= 8 {
+    return format!("len={} [{}]", len, "*".repeat(len));
+  }
+  let head = chars.iter().take(4).collect::<String>();
+  let tail = chars.iter().skip(len - 4).collect::<String>();
+  format!("len={} {}****{}", len, head, tail)
+}
+
 fn emit_event(app: &AppHandle, task_id: &str, level: &str, event: &str, message: String, status: Option<String>) {
   let payload = TaskEvent {
     task_id: task_id.to_string(),
@@ -61,7 +86,26 @@ async fn verify_key(client: &Client, connect_sid: &str, code: &str) -> Result<St
     .await
     .context("verify_captcha request failed")?;
 
-  let data: VerifyResp = resp.json().await.context("verify_captcha parse failed")?;
+  let status = resp.status();
+  let body = resp.text().await.context("verify_captcha read body failed")?;
+  let data: VerifyResp = serde_json::from_str(&body).with_context(|| {
+    format!(
+      "verify_captcha parse failed (status={}, body={})",
+      status,
+      truncate_for_log(&body, 300)
+    )
+  })?;
+
+  if !status.is_success() {
+    return Err(anyhow!(
+      "verify_captcha http {}: {}",
+      status,
+      data
+        .message
+        .unwrap_or_else(|| truncate_for_log(&body, 200))
+    ));
+  }
+
   if data.success {
     data.key.ok_or_else(|| anyhow!("verify_captcha success but key is empty"))
   } else {
@@ -87,7 +131,27 @@ async fn get_download_link(
     .await
     .context("get_download_link request failed")?;
 
-  let data: LinkResp = resp.json().await.context("get_download_link parse failed")?;
+  let status = resp.status();
+  let body = resp.text().await.context("get_download_link read body failed")?;
+  let data: LinkResp = serde_json::from_str(&body).with_context(|| {
+    format!(
+      "get_download_link parse failed (status={}, body={})",
+      status,
+      truncate_for_log(&body, 300)
+    )
+  })?;
+
+  if !status.is_success() {
+    return Err(anyhow!(
+      "get_download_link http {} for {}: {}",
+      status,
+      id,
+      data
+        .message
+        .unwrap_or_else(|| truncate_for_log(&body, 200))
+    ));
+  }
+
   if data.success {
     data.url.ok_or_else(|| anyhow!("get_download_link success but url is empty"))
   } else {
@@ -178,7 +242,7 @@ pub async fn run_task(
   cancel_flag: Arc<AtomicBool>,
 ) {
   let retries = input.retries.unwrap_or(3).max(1);
-  let interval_ms = input.request_interval_ms.unwrap_or(200);
+  let interval_ms = input.request_interval_ms.unwrap_or(1000);
 
   update_task(&state, &task_id, |t| {
     t.status = "running".to_string();
@@ -263,6 +327,22 @@ pub async fn run_task(
     "adx"
   };
 
+  push_log(
+    &state,
+    &task_id,
+    format!(
+      "任务参数: auth_mode={}, connect.sid={}, key={}, type={}, format={}, retries={}, interval_ms={}, output_dir={}",
+      input.auth_mode,
+      mask_secret(&input.connect_sid),
+      mask_secret(&key),
+      kind,
+      ext,
+      retries,
+      interval_ms,
+      input.output_dir
+    ),
+  );
+
   let mut new_files: Vec<PathBuf> = Vec::new();
 
   for id in merged_ids {
@@ -301,15 +381,16 @@ pub async fn run_task(
     let url = match link_result {
       Ok(v) => v,
       Err(e) => {
+        let reason = truncate_for_log(&e.to_string(), 280);
         update_task(&state, &task_id, |t| {
           t.fail_count += 1;
           t.processed_ids += processed_delta;
           t.fail_items.push(FailItem {
             id: id.clone(),
-            reason: format!("link_fail: {}", e),
+            reason: format!("link_fail: {}", reason),
           });
         });
-        let line = format!("FAIL {}: 获取下载链接失败", id);
+        let line = format!("FAIL {}: 获取下载链接失败 | {}", id, reason);
         push_log(&state, &task_id, line.clone());
         emit_event(&app, &task_id, "error", "fail", line, Some("running".to_string()));
         sleep(Duration::from_millis(interval_ms)).await;
@@ -338,15 +419,16 @@ pub async fn run_task(
         emit_event(&app, &task_id, "info", "ok", line, Some("running".to_string()));
       }
       Err(e) => {
+        let reason = truncate_for_log(&e.to_string(), 280);
         update_task(&state, &task_id, |t| {
           t.fail_count += 1;
           t.processed_ids += processed_delta;
           t.fail_items.push(FailItem {
             id: id.clone(),
-            reason: format!("download_fail: {}", e),
+            reason: format!("download_fail: {}", reason),
           });
         });
-        let line = format!("FAIL {}: 下载失败", id);
+        let line = format!("FAIL {}: 下载失败 | {}", id, reason);
         push_log(&state, &task_id, line.clone());
         emit_event(&app, &task_id, "error", "fail", line, Some("running".to_string()));
       }
@@ -355,64 +437,70 @@ pub async fn run_task(
     sleep(Duration::from_millis(interval_ms)).await;
   }
 
-  if input.auto_bundle && !new_files.is_empty() {
-    let output = input.bundle_output_path.clone().unwrap_or_else(|| {
-      output_dir
-        .join(format!("bundle_no_mp4_{}.adx", Local::now().format("%Y%m%d_%H%M%S")))
-        .to_string_lossy()
-        .to_string()
-    });
+  if input.auto_bundle {
+    if new_files.is_empty() {
+      let line = "自动整合已跳过: 本次无新增下载文件".to_string();
+      push_log(&state, &task_id, line.clone());
+      emit_event(&app, &task_id, "info", "bundle_skip", line, Some("running".to_string()));
+    } else {
+      let output = input.bundle_output_path.clone().unwrap_or_else(|| {
+        output_dir
+          .join(format!("bundle_merged_{}.adx", Local::now().format("%Y%m%d_%H%M%S")))
+          .to_string_lossy()
+          .to_string()
+      });
 
-    let output_path = PathBuf::from(output.clone());
-    emit_event(
-      &app,
-      &task_id,
-      "info",
-      "bundle_start",
-      "开始自动整合（仅本次新下载文件）".to_string(),
-      Some("running".to_string()),
-    );
+      let output_path = PathBuf::from(output.clone());
+      emit_event(
+        &app,
+        &task_id,
+        "info",
+        "bundle_start",
+        "开始自动整合（仅本次新下载文件）".to_string(),
+        Some("running".to_string()),
+      );
 
-    let bundle_result = tauri::async_runtime::spawn_blocking(move || {
-      bundler::build_bundle_from_files(&new_files, &output_path, None)
-    })
-    .await;
+      let bundle_result = tauri::async_runtime::spawn_blocking(move || {
+        bundler::build_bundle_from_files(&new_files, &output_path)
+      })
+      .await;
 
-    match bundle_result {
-      Ok(Ok(summary)) => {
-        update_task(&state, &task_id, |t| {
-          t.bundle_output_path = Some(summary.output_path.clone());
-        });
-        let line = format!(
-          "自动整合完成: {}（源文件 {}，处理 {}，删除 mp4 {}，备份 {}）",
-          summary.output_path, summary.source_file_count, summary.processed_count, summary.mp4_removed, summary.backup_dir
-        );
-        push_log(&state, &task_id, line.clone());
-        emit_event(&app, &task_id, "info", "bundle_done", line, Some("running".to_string()));
-      }
-      Ok(Err(e)) => {
-        set_task_message(&state, &task_id, "failed", format!("自动整合失败: {}", e));
-        emit_event(
-          &app,
-          &task_id,
-          "error",
-          "fatal",
-          format!("自动整合失败: {}", e),
-          Some("failed".to_string()),
-        );
-        return;
-      }
-      Err(e) => {
-        set_task_message(&state, &task_id, "failed", format!("自动整合任务异常: {}", e));
-        emit_event(
-          &app,
-          &task_id,
-          "error",
-          "fatal",
-          format!("自动整合任务异常: {}", e),
-          Some("failed".to_string()),
-        );
-        return;
+      match bundle_result {
+        Ok(Ok(summary)) => {
+          update_task(&state, &task_id, |t| {
+            t.bundle_output_path = Some(summary.output_path.clone());
+          });
+          let line = format!(
+            "自动整合完成: {}（源文件 {}，处理 {}）",
+            summary.output_path, summary.source_file_count, summary.processed_count
+          );
+          push_log(&state, &task_id, line.clone());
+          emit_event(&app, &task_id, "info", "bundle_done", line, Some("running".to_string()));
+        }
+        Ok(Err(e)) => {
+          set_task_message(&state, &task_id, "failed", format!("自动整合失败: {}", e));
+          emit_event(
+            &app,
+            &task_id,
+            "error",
+            "fatal",
+            format!("自动整合失败: {}", e),
+            Some("failed".to_string()),
+          );
+          return;
+        }
+        Err(e) => {
+          set_task_message(&state, &task_id, "failed", format!("自动整合任务异常: {}", e));
+          emit_event(
+            &app,
+            &task_id,
+            "error",
+            "fatal",
+            format!("自动整合任务异常: {}", e),
+            Some("failed".to_string()),
+          );
+          return;
+        }
       }
     }
   }

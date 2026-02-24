@@ -23,3 +23,4 @@ uuid = { version = "1", features = ["serde", "v4"] }
 walkdir = "2"
 parking_lot = "0.12"
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
+tauri-plugin-dialog = "2"

@@ -11,8 +11,6 @@
   - `输出格式`（`.adx` / `.zip`）
 - 下载完成后可选自动整合为单 `.adx`：
   - 仅处理本次新下载文件
-  - 自动删除 `.mp4`
-  - 自动备份源文件
 - 任务状态：启动、进度、日志、失败项、取消
 - 支持手动刷新外部 `collections` 目录（运行时 overlay）
 
@@ -49,5 +47,5 @@ cd src-tauri && cargo check
 - `src/`：前端 UI
 - `src-tauri/src/collections.rs`：manifest 解析与清单加载
 - `src-tauri/src/downloader.rs`：下载任务与鉴权流程
-- `src-tauri/src/bundler.rs`：自动整合与删 mp4
+- `src-tauri/src/bundler.rs`：自动整合
 - `src-tauri/src/lib.rs`：Tauri 命令与任务状态管理
