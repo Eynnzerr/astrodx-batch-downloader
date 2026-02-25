@@ -12,8 +12,39 @@ on:
         type: string
 
 jobs:
+  prepare-release:
+    name: Prepare release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      release_id: ${{ steps.release.outputs.release_id }}
+      release_tag: ${{ steps.release.outputs.release_tag }}
+    steps:
+      - name: Resolve tag and ensure release exists
+        id: release
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "release_tag=${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Release ${RELEASE_TAG} already exists"
+          else
+            gh release create "$RELEASE_TAG" \
+              --target "${GITHUB_SHA}" \
+              --title "AstroDX Batch Downloader ${RELEASE_TAG}" \
+              --notes "Automated cross-platform release for macOS arm64, Windows x64/arm64 and Linux x64/arm64."
+          fi
+
+          RELEASE_ID="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" --jq .id)"
+          echo "release_id=${RELEASE_ID}" >> "$GITHUB_OUTPUT"
+
   build-and-release:
     name: Build (${{ matrix.platform }})
+    needs: prepare-release
     runs-on: ${{ matrix.os }}
     permissions:
       contents: write
@@ -121,10 +152,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
-          releaseName: AstroDX Batch Downloader ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
+          releaseId: ${{ needs.prepare-release.outputs.release_id }}
+          tagName: ${{ needs.prepare-release.outputs.release_tag }}
+          releaseName: AstroDX Batch Downloader ${{ needs.prepare-release.outputs.release_tag }}
           releaseBody: |
             Automated cross-platform release for macOS arm64, Windows x64/arm64 and Linux x64/arm64.
           releaseDraft: false
           prerelease: false
+          retryAttempts: 3
           args: ${{ matrix.tauri_args }}
