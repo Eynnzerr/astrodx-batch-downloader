@@ -26,6 +26,15 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "category": "Utility",
+    "shortDescription": "AstroDX 谱面批量下载与整合工具",
+    "longDescription": "用于按清单批量下载 AstroDX 谱面并自动整合为可导入的包文件。",
+    "copyright": "Copyright (c) 2026",
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      }
+    },
     "resources": [
       "../collections/**/*"
     ]

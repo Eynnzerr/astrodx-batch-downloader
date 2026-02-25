@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 use chrono::Local;
+use uuid::Uuid;
 use walkdir::WalkDir;
 use zip::write::FileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
@@ -32,8 +33,7 @@ pub fn build_bundle_from_files(
   ensure_parent(output_path)?;
 
   let ts = Local::now().format("%Y%m%d_%H%M%S").to_string();
-
-  let work_root = std::env::temp_dir().join(format!("niconico_bundle_{}", ts));
+  let work_root = std::env::temp_dir().join(format!("niconico_bundle_{}_{}", ts, Uuid::new_v4()));
   let zip_copies = work_root.join("zip_copies");
   let extracted = work_root.join("extracted");
   fs::create_dir_all(&zip_copies)?;

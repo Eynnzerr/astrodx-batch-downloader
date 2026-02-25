@@ -1,6 +1,20 @@
-# niconico-app
+# AstroDX Batch Downloader
 
-基于 Tauri + Rust 的本地谱面批量下载工具。
+基于 Tauri + Rust 的本地谱面批量下载工具。本工具为 [AstroDX 谱面下载站](https://astrodx.milkbot.cn/)的非官方辅助工具，用于从下载站按索引文件批量下载谱面文件，并将其自动整合为整合包，以一次性导入到游戏中。
+
+本工具的开发计划与下载站和 AstroDX 游戏本体均无关联，仅为分享我从下载站以自动化批量下载谱面的方法。
+
+## 使用教程
+
+参见 wiki。
+
+## 平台支持
+
+- [x] macOS arm64
+- [x] Windows x64 / arm64
+- [x] Linux x64 / arm64
+- [ ] Android
+- [ ] iOS
 
 ## 已实现功能
 
@@ -19,6 +33,24 @@
 - Frontend: React + Vite + TypeScript
 - Backend: Rust + Tauri
 
+## 平台依赖
+
+### Windows
+
+- 依赖 Microsoft WebView2 Runtime（安装包会自动引导安装）
+
+### Linux（Ubuntu/Debian 系）
+
+```bash
+sudo apt-get update
+sudo apt-get install -y \
+  libwebkit2gtk-4.1-dev \
+  libappindicator3-dev \
+  librsvg2-dev \
+  patchelf \
+  build-essential
+```
+
 ## 开发运行
 
 ```bash
@@ -29,8 +61,7 @@ npm run tauri dev
 ## 生产构建
 
 ```bash
-npm run build
-cd src-tauri && cargo check
+npm run tauri build
 ```
 
 ## 关键接口（Tauri commands）

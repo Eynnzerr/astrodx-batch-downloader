@@ -65,6 +65,35 @@ fn mask_secret(input: &str) -> String {
   format!("len={} {}****{}", len, head, tail)
 }
 
+fn sanitize_id_for_filename(id: &str) -> String {
+  let mut normalized = String::with_capacity(id.len());
+  for ch in id.chars() {
+    let invalid = ch.is_control() || matches!(ch, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*');
+    normalized.push(if invalid { '_' } else { ch });
+  }
+
+  let mut cleaned = normalized.trim_matches(|c: char| c == ' ' || c == '.').to_string();
+  if cleaned.is_empty() {
+    cleaned = "unknown".to_string();
+  }
+
+  let stem_upper = cleaned
+    .split('.')
+    .next()
+    .unwrap_or_default()
+    .to_ascii_uppercase();
+  let is_reserved = matches!(stem_upper.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+    || (stem_upper.len() == 4
+      && (stem_upper.starts_with("COM") || stem_upper.starts_with("LPT"))
+      && stem_upper[3..].chars().all(|c| ('1'..='9').contains(&c)));
+
+  if is_reserved {
+    cleaned.push_str("_file");
+  }
+
+  cleaned
+}
+
 fn emit_event(app: &AppHandle, task_id: &str, level: &str, event: &str, message: String, status: Option<String>) {
   let payload = TaskEvent {
     task_id: task_id.to_string(),
@@ -352,7 +381,8 @@ pub async fn run_task(
       return;
     }
 
-    let out_path = output_dir.join(format!("{}.{}", id, ext));
+    let safe_id = sanitize_id_for_filename(&id);
+    let out_path = output_dir.join(format!("{}.{}", safe_id, ext));
 
     let processed_delta = 1usize;
     if let Ok(meta) = fs::metadata(&out_path).await {
