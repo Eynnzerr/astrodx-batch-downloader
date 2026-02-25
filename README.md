@@ -6,7 +6,7 @@
 
 ## 使用教程
 
-参见 wiki。
+参见 [docs/tutorial.md](docs/tutorial.md)。
 
 ## 平台支持
 
